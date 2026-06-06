@@ -154,9 +154,9 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
     x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
 
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + eps)
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + eps)
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + eps)
+    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 )+ eps
+    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 )+ eps
+    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 )+ eps
 
     ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
     ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
@@ -271,23 +271,6 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 # ============================================================
 # Numerical Solution via SciPy
 # ============================================================
-def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
-    x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
-
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + eps)
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + eps)
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + eps)
-
-    ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
-    ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
-    ax2 = G * (m[0]*(x1 - x2)/r12**3 + m[2]*(x3 - x2)/r23**3)
-    ay2 = G * (m[0]*(y1 - y2)/r12**3 + m[2]*(y3 - y2)/r23**3)
-    ax3 = G * (m[0]*(x1 - x3)/r13**3 + m[1]*(x2 - x3)/r23**3)
-    ay3 = G * (m[0]*(y1 - y3)/r13**3 + m[1]*(y2 - y3)/r23**3)
-
-    return [vx1, vy1, ax1, ay1,
-            vx2, vy2, ax2, ay2,
-            vx3, vy3, ax3, ay3]
 
 t_span = (0, endTime)
 t_eval = np.linspace(0, endTime, 5000)

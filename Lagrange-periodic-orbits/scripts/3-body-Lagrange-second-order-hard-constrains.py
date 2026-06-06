@@ -9,8 +9,10 @@ from scipy.interpolate import interp1d
 from numpy.linalg import norm
 
 dde.config.set_default_float("float64")
-np.random.seed(137)
-tf.random.set_seed(137)
+seed=137
+np.random.seed(seed)
+tf.random.set_seed(seed)
+dde.config.set_random_seed(seed)
 
 # Constants
 scale=2  #scale factor  -- time/scale**3 -- space/scale**2 -- velocities*scale
@@ -59,9 +61,9 @@ def three_body_ode_second(t, y):
     x1, y1, x2, y2, x3, y3 = [y[:, i:i+1] for i in range(6)]
 
     # pairwise distances
-    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 + eps)
-    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 + eps)
-    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 + eps)
+    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 )
+    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 )
+    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 )
 
     r12_3 = (r12+eps)**3
     r13_3 = (r13+eps)**3
@@ -156,9 +158,9 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
     x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
 
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + eps)
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + eps)
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + eps)
+    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 )+ eps
+    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 )+ eps
+    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 )+ eps
 
     ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
     ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
@@ -222,13 +224,19 @@ interp_x3 = interp1d(t_eval, x3_n, kind='cubic')
 interp_y3 = interp1d(t_eval, y3_n, kind='cubic')
 
 x1_err = norm(x1 - interp_x1(t_test[:,0])) / norm(interp_x1(t_test[:,0]))
+y1_err = norm(y1 - interp_y1(t_test[:,0])) / norm(interp_y1(t_test[:,0]))
 x2_err = norm(x2 - interp_x2(t_test[:,0])) / norm(interp_x2(t_test[:,0]))
+y2_err = norm(y2 - interp_y2(t_test[:,0])) / norm(interp_y2(t_test[:,0]))
 x3_err = norm(x3 - interp_x3(t_test[:,0])) / norm(interp_x3(t_test[:,0]))
+y3_err = norm(y3 - interp_y3(t_test[:,0])) / norm(interp_y3(t_test[:,0]))
 
 print("\n--- L2 Relative Errors ---")
-print(f"Body 1: {x1_err:.2e}")
-print(f"Body 2: {x2_err:.2e}")
-print(f"Body 3: {x3_err:.2e}")
+print(f"Body 1 x error: {x1_err:.2e}")
+print(f"Body 1 y error: {y1_err:.2e}")
+print(f"Body 2 x error: {x2_err:.2e}")
+print(f"Body 2 y error: {y2_err:.2e}")
+print(f"Body 3 x error: {x3_err:.2e}")
+print(f"Body 3 y error: {y3_err:.2e}")
 
 
 
@@ -273,23 +281,6 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 # ============================================================
 # Numerical Solution via SciPy
 # ============================================================
-def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
-    x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
-
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + 1e-6)
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + 1e-6)
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + 1e-6)
-
-    ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
-    ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
-    ax2 = G * (m[0]*(x1 - x2)/r12**3 + m[2]*(x3 - x2)/r23**3)
-    ay2 = G * (m[0]*(y1 - y2)/r12**3 + m[2]*(y3 - y2)/r23**3)
-    ax3 = G * (m[0]*(x1 - x3)/r13**3 + m[1]*(x2 - x3)/r23**3)
-    ay3 = G * (m[0]*(y1 - y3)/r13**3 + m[1]*(y2 - y3)/r23**3)
-
-    return [vx1, vy1, ax1, ay1,
-            vx2, vy2, ax2, ay2,
-            vx3, vy3, ax3, ay3]
 
 t_span = (0, endTime)
 t_eval = np.linspace(0, endTime, 5000)
@@ -299,8 +290,8 @@ y0_full = np.array([
     x2_0, y2_0, vx2_0, vy2_0,
     x3_0, y3_0, vx3_0, vy3_0
 ])
-
 sol = solve_ivp(three_body_numeric, t_span, y0_full, t_eval=t_eval, rtol=1e-10, atol=1e-12)
+
 
 x1_n, y1_n = sol.y[0], sol.y[1]
 x2_n, y2_n = sol.y[4], sol.y[5]
@@ -342,13 +333,19 @@ interp_x3 = interp1d(t_eval, x3_n, kind='cubic')
 interp_y3 = interp1d(t_eval, y3_n, kind='cubic')
 
 x1_err = norm(x1 - interp_x1(t_test[:,0])) / norm(interp_x1(t_test[:,0]))
+y1_err = norm(y1 - interp_y1(t_test[:,0])) / norm(interp_y1(t_test[:,0]))
 x2_err = norm(x2 - interp_x2(t_test[:,0])) / norm(interp_x2(t_test[:,0]))
+y2_err = norm(y2 - interp_y2(t_test[:,0])) / norm(interp_y2(t_test[:,0]))
 x3_err = norm(x3 - interp_x3(t_test[:,0])) / norm(interp_x3(t_test[:,0]))
+y3_err = norm(y3 - interp_y3(t_test[:,0])) / norm(interp_y3(t_test[:,0]))
 
 print("\n--- L2 Relative Errors ---")
-print(f"Body 1: {x1_err:.2e}")
-print(f"Body 2: {x2_err:.2e}")
-print(f"Body 3: {x3_err:.2e}")
+print(f"Body 1 x error: {x1_err:.2e}")
+print(f"Body 1 y error: {y1_err:.2e}")
+print(f"Body 2 x error: {x2_err:.2e}")
+print(f"Body 2 y error: {y2_err:.2e}")
+print(f"Body 3 x error: {x3_err:.2e}")
+print(f"Body 3 y error: {y3_err:.2e}")
 
 
 
