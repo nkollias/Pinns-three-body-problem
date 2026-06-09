@@ -33,9 +33,7 @@ We train a PINN for the three-body problem using noisy observations from the per
 import os
 os.environ["DDE_BACKEND"] = "tensorflow"
 
-!pip install deepxde
 
-!pip install tensorflow tf_keras matplotlib numpy scipy
 
 """## IMPORTS"""
 
