@@ -1,13 +1,23 @@
-"""
-PINN for the 3-body problem in 2D using DeepXDE
-+ Numerical integration with SciPy for comparison
+# -*- coding: utf-8 -*-
+"""git-Hard-constrains-first-order-system-Euler-3-body.ipynb
+
+#EULER PERIODIC ORBIT- FIRST ORDER SYSTEM
+## ICs enforced with hard constrains
+## Configuration: Bodies 1 & 2 orbit around stationary body 3
+
+## Installation-Imports
+
+
+*  first set backend
+*  install libraries
+*  then import modules
 """
 
-# ============================================================
-# Imports and setup
-# ============================================================
 import os
 os.environ["DDE_BACKEND"] = "tensorflow"
+
+#!pip install deepxde matplotlib numpy tensorflow tf_keras
+
 import deepxde as dde
 import numpy as np
 import tensorflow as tf
@@ -16,6 +26,15 @@ from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 from numpy.linalg import norm
 
+"""# TRAINING - Adjust weights using PDE Residual Losses
+## There are 12 ODE-Loss terms... training is hard since velocity and acceleration terms are of different order. Especially dynamics of stationary body (body 3) hard for pinn.
+## Second order algorithm L-BFGS is commented- takes too long with GPUs
+## Proposed training strategy
+
+*   Training with GPUs without second order algorithm
+*   Training with TPUs and second order algorithm
+
+"""
 
 #set high precision
 dde.config.set_default_float("float64")
@@ -31,7 +50,7 @@ tf.random.set_seed(seed)
 # ============================================================
 G = 1.0
 m = [1.0, 1.0, 1.0]
-endTime = 1
+endTime = 1 #close to one period
 
 num_domain = 64
 num_boundary = 12
@@ -42,7 +61,11 @@ activation = "tanh"
 #initializer = "Glorot uniform"
 initializer = tf.keras.initializers.GlorotUniform(seed=seed) # better set seeded initializer
 
-#loss weights for velocity and accelaration terms - see ODE definition
+
+# ============================================================
+# Training Hyperparameters
+# - loss weights for velocity and accelaration terms - see ODE definition
+# ============================================================
 
 #loss_weights=[10,10,1,1,10,10,1,1,100,100,100,100]
 #loss_weights=[1,1,0.1,0.1,1,1,0.1,0.1,1,1,0.1,0.1]
@@ -50,8 +73,8 @@ initializer = tf.keras.initializers.GlorotUniform(seed=seed) # better set seeded
 
 loss_weights=[1]*12 # equal weights to test differencies in terms
                     # then set appropriate weights per term ....
-iterations = 200000
-learning_rate=0.0001
+iterations =200000        #200000
+learning_rate=0.0001 #test also with lower learning rate
 eps = tf.constant(1e-9, dtype=tf.float64) # important to avoid division by zero!
 
 # ============================================================
@@ -62,11 +85,11 @@ def three_body_ode(t, y):
         y[:, i:i+1] for i in range(12)
     ]
 
-    r12 = tf.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2 )
-    r13 = tf.sqrt((x1 - x3) ** 2 + (y1 - y3) ** 2 )
-    r23 = tf.sqrt((x2 - x3) ** 2 + (y2 - y3) ** 2 )
+    r12 = tf.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2 + eps)
+    r13 = tf.sqrt((x1 - x3) ** 2 + (y1 - y3) ** 2 + eps)
+    r23 = tf.sqrt((x2 - x3) ** 2 + (y2 - y3) ** 2 + eps)
 
-    r12_3, r13_3, r23_3 = (r12+ eps)**3, (r13+ eps)**3, (r23+ eps)**3
+    r12_3, r13_3, r23_3 = (r12)**3, (r13)**3, (r23)**3
 
     dx1_dt = dde.grad.jacobian(y, t, i=0)
     dy1_dt = dde.grad.jacobian(y, t, i=1)
@@ -134,7 +157,7 @@ net = dde.nn.FNN(layer_size, activation, initializer)
 # Enforce ICs with Hard constrains
 # ============================================================
 def output_transform(t, y):
-    return  y * t + y0_tf  # Hard enforcement of ICs 
+    return  y * t + y0_tf  # Hard enforcement of ICs
 
 net.apply_output_transform(output_transform)
 #==============================================================
@@ -143,9 +166,22 @@ model = dde.Model(data, net)
 model.compile("adam", lr=learning_rate,loss_weights=loss_weights,loss="MSE")
 losshistory, train_state = model.train(iterations=iterations)
 
-#second order algorithm for refinement - comment if takes too long
-#model.compile("L-BFGS")  # no learning rate needed
-#losshistory, train_state = model.train()
+#-->second order algorithm for refinement - comment if takes too long
+model.compile("L-BFGS")  # no learning rate needed
+losshistory, train_state = model.train()
+
+# ============================================================
+#   SAVE AND LOAD MODEL
+# ============================================================
+## Load the saved weights
+# first - Build the network with dummy predict
+#_ = model.predict(np.array([[0.0]]))
+#model.restore("Euler_1st_order_system-2000.weights.h5")
+model.save("Euler_1st_order_system")
+
+"""#Plots-Results
+## Notice in pde residual losses plot that stationary body accelaration terms (body 3) exhibit oscillatory spikes which affect convergence. Due to chaotic behaviour of the system this greatly affects pinn's solution.
+"""
 
 dde.saveplot(losshistory, train_state, issave=True, isplot=True)
 
@@ -298,7 +334,7 @@ for i in range(12):
         linestyle = "--"   # dotted/dashed for velocity terms
     else:
         linestyle = "-"    # solid  for acceleration terms
-        
+
     plt.semilogy(losses[:, i], label=residual_names[i],linestyle=linestyle)
 
 plt.xlabel("Training step")
@@ -307,4 +343,240 @@ plt.title("PDE Residual Losses")
 plt.legend()
 plt.grid(True)
 plt.show()
+
+"""STATISTICS"""
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+
+print("\n")
+print("="*60)
+print("STATISTICS")
+print("="*60)
+
+# ============================================================
+# Numerical solution
+# ============================================================
+
+x1_n  = sol.y[0]
+y1_n  = sol.y[1]
+vx1_n = sol.y[2]
+vy1_n = sol.y[3]
+
+x2_n  = sol.y[4]
+y2_n  = sol.y[5]
+vx2_n = sol.y[6]
+vy2_n = sol.y[7]
+
+x3_n  = sol.y[8]
+y3_n  = sol.y[9]
+vx3_n = sol.y[10]
+vy3_n = sol.y[11]
+
+# ============================================================
+# TRAIN / TEST LOSS
+# ============================================================
+
+train_losses = np.array(losshistory.loss_train)
+test_losses  = np.array(losshistory.loss_test)
+
+final_train_loss = np.sum(train_losses[-1])
+final_test_loss  = np.sum(test_losses[-1])
+
+LPDE = final_train_loss     # hard constraints
+LDATA = 0.0
+
+print(f"Final Training Loss : {final_train_loss:.2e}")
+print(f"Final Test Loss     : {final_test_loss:.2e}")
+print(f"PDE Residual Loss   : {LPDE:.2e}")
+print(f"Data Loss           : {LDATA:.2e}")
+
+# ============================================================
+# 2. POSITION ERRORS - RMSE
+# ============================================================
+
+err1 = np.sqrt((x1 - x1_ref)**2 + (y1 - y1_ref)**2)
+err2 = np.sqrt((x2 - x2_ref)**2 + (y2 - y2_ref)**2)
+err3 = np.sqrt((x3 - x3_ref)**2 + (y3 - y3_ref)**2)
+
+rmse1 = np.sqrt(np.mean(err1**2))
+rmse2 = np.sqrt(np.mean(err2**2))
+rmse3 = np.sqrt(np.mean(err3**2))
+
+RMSE = np.sqrt(np.mean(
+    np.concatenate([
+        err1**2,
+        err2**2,
+        err3**2
+    ])
+))
+
+print("\nPosition RMSE")
+print("-----------------------------")
+print(f"Body 1 : {rmse1:.2e}")
+print(f"Body 2 : {rmse2:.2e}")
+print(f"Body 3 : {rmse3:.2e}")
+print(f"Global : {RMSE:.2e}")
+
+print("\nMaximum Position Error")
+print("-----------------------------")
+print(f"Body 1 : {np.max(err1):.2e}")
+print(f"Body 2 : {np.max(err2):.2e}")
+print(f"Body 3 : {np.max(err3):.2e}")
+
+# ============================================================
+# 3. ENERGY
+# ============================================================
+
+vx1 = y_pred[:,2]
+vy1 = y_pred[:,3]
+
+vx2 = y_pred[:,6]
+vy2 = y_pred[:,7]
+
+vx3 = y_pred[:,10]
+vy3 = y_pred[:,11]
+
+
+def total_energy(x1,y1,vx1,vy1,
+                 x2,y2,vx2,vy2,
+                 x3,y3,vx3,vy3,
+                 G=1.0,
+                 m=(1.0,1.0,1.0),
+                 eps=0.0):
+
+    KE = (
+        0.5*m[0]*(vx1**2+vy1**2)
+        +0.5*m[1]*(vx2**2+vy2**2)
+        +0.5*m[2]*(vx3**2+vy3**2)
+    )
+
+    r12 = np.sqrt((x1-x2)**2+(y1-y2)**2+eps)
+    r13 = np.sqrt((x1-x3)**2+(y1-y3)**2+eps)
+    r23 = np.sqrt((x2-x3)**2+(y2-y3)**2+eps)
+
+    PE = (
+        -G*m[0]*m[1]/r12
+        -G*m[0]*m[2]/r13
+        -G*m[1]*m[2]/r23
+    )
+
+    return KE + PE
+
+
+E = total_energy(
+    x1,y1,vx1,vy1,
+    x2,y2,vx2,vy2,
+    x3,y3,vx3,vy3,
+    G,m,eps
+)
+
+E0 = E[0]
+
+DE_E0 = np.max(np.abs(E-E0))/abs(E0)
+
+print("\nEnergy Conservation")
+print("-----------------------------")
+print(f"PINN ΔE/E0 : {DE_E0:.2e}")
+
+E_num = total_energy(
+    x1_n, y1_n, vx1_n, vy1_n,
+    x2_n, y2_n, vx2_n, vy2_n,
+    x3_n, y3_n, vx3_n, vy3_n,
+    G, m, eps
+)
+
+E0_num = E_num[0]
+
+DE_E0_num = np.max(np.abs(E_num-E0_num))/abs(E0_num)
+
+
+print("-----------------------------")
+print(f"Numerical ΔE/E0 : {DE_E0_num:.2e}")
+
+# ============================================================
+# 4. LINEAR MOMENTUM DRIFT
+# ============================================================
+
+Px = m[0]*vx1 + m[1]*vx2 + m[2]*vx3
+Py = m[0]*vy1 + m[1]*vy2 + m[2]*vy3
+
+DeltaP = np.max(
+    np.sqrt(
+        (Px - Px[0])**2 +
+        (Py - Py[0])**2
+    )
+)
+
+print("\nLinear Momentum")
+print("-----------------------------")
+print(f"PINN Max Momentum Drift : {DeltaP:.2e}")
+
+Px_n = m[0]*vx1_n + m[1]*vx2_n + m[2]*vx3_n
+Py_n = m[0]*vy1_n + m[1]*vy2_n + m[2]*vy3_n
+
+DeltaP_n = np.max(
+    np.sqrt(
+        (Px_n - Px_n[0])**2 +
+        (Py_n - Py_n[0])**2
+    )
+)
+
+
+print("-----------------------------")
+print(f"Numerical Max Momentum Drift : {DeltaP_n:.2e}")
+
+
+# ============================================================
+# 5. ANGULAR MOMENTUM
+# ============================================================
+
+L = (
+      m[0]*(x1*vy1-y1*vx1)
+    + m[1]*(x2*vy2-y2*vx2)
+    + m[2]*(x3*vy3-y3*vx3)
+)
+
+L0 = L[0]
+
+DL_L0 = np.max(np.abs(L-L0))/max(abs(L0),1e-15)
+
+print("\nAngular Momentum Conservation")
+print("-----------------------------")
+print(f"ΔL/L0 : {DL_L0:.2e}")
+
+# ============================================================
+# BODY 3 DRIFT  - for Euler orbits
+# ============================================================
+
+body3_drift = np.max(
+    np.sqrt(
+        (x3 - x3[0])**2 +
+        (y3 - y3[0])**2
+    )
+)
+
+print("\nBody 3 drift")
+print("-----------------------------")
+print(f"Body 3 Drift         : {body3_drift:.2e}")
+
+# ============================================================
+# FINAL SUMMARY
+# ============================================================
+
+print("\n")
+print("="*60)
+print("SUMMARY")
+print("="*60)
+
+print(f"Final Training Loss : {final_train_loss:.2e}")
+print(f"Final Test Loss     : {final_test_loss:.2e}")
+print(f"PDE Residual Loss   : {LPDE:.2e}")
+print(f"Data Loss           : {LDATA:.2e}")
+print(f"Position RMSE       : {RMSE:.2e}")
+print(f"ΔE/E0               : {DE_E0:.2e}")
+print(f"Max Momentum Drift ΔP    : {DeltaP:.2e}")
+print(f"ΔL/L0               : {DL_L0:.2e}")
 
