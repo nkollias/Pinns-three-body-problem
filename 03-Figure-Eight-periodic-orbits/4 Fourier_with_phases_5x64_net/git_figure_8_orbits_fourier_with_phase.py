@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""git-FIGURE-8-orbits.ipynb
+"""git-FIGURE-8-orbits_Fourier_with_phase.ipynb
 
-## Figure Eight periodic orbits
+
+## Figure Eight periodic orbits - Fourier input tranform with phase shift
 ---
 Although the figure-eight orbit is generally more stable than the Euler and Lagrange families of periodic solutions, and despite its choreographic nature—where all three bodies follow the same trajectory with a constant phase shift of $2\pi/3$—we initially expected the problem to be relatively straightforward for a PINN. In this orbit, the bodies remain well separated throughout the motion, avoiding close encounters and the associated large accelerations that often complicate the learning process.
 
@@ -17,6 +18,9 @@ Contrary to these expectations, the PINN exhibited difficulties in accurately le
 import os
 os.environ["DDE_BACKEND"] = "tensorflow"
 
+#!pip install deepxde
+
+#!pip install tensorflow tf_keras matplotlib numpy scipy
 
 """## IMPORTS"""
 
@@ -105,9 +109,9 @@ def three_body_ode_second(t, y):
     x1, y1, x2, y2, x3, y3 = [y[:, i:i+1] for i in range(6)]
 
     # pairwise distances
-    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 )+eps
-    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 )+eps
-    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 )+eps
+    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 +eps)
+    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 +eps)
+    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 +eps)
 
     r12_3 = (r12)**3
     r13_3 = (r13)**3
@@ -181,10 +185,10 @@ def input_transform(x):
         t,
         tf.sin( omega*t),
         tf.cos( omega*t),
+        tf.sin( omega*t+phase),
+        tf.cos( omega*t+phase),
         tf.sin( 2*omega*t+phase),
         tf.cos( 2*omega*t+phase),
-        tf.sin( 3*omega*t+phase),
-        tf.cos( 3*omega*t+phase),
 
 
     ]
@@ -203,8 +207,17 @@ model.compile(optimizer, lr=learning_rate, loss_weights=loss_weights, loss="MSE"
 losshistory, train_state = model.train(iterations=iterations)
 
 
-#model.compile("L-BFGS")  # no learning rate needed
-#losshistory, train_state = model.train()
+model.compile("L-BFGS")  # no learning rate needed
+losshistory, train_state = model.train()
+
+# ============================================================
+#   SAVE AND LOAD MODEL
+# ============================================================
+## Load the saved weights
+# first - Build the network with dummy predict
+#_ = model.predict(np.array([[0.0]]))
+#model.restore("Figure-8_Fourier_with_phase-xxxxx.weights.h5")
+model.save("Figure-8_Fourier_with_phase")
 
 """#Plots-Results"""
 
@@ -226,9 +239,9 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
     x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
 
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + 1e-6)
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + 1e-6)
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + 1e-6)
+    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 + eps)
+    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 + eps)
+    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 + eps)
 
     ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
     ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
@@ -329,6 +342,257 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
+"""#STATISTICS"""
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+
+print("\n")
+print("="*60)
+print("STATISTICS")
+print("="*60)
+
+# ============================================================
+# PINN velocities from automatic differentiation
+# ============================================================
+
+t_tf = tf.convert_to_tensor(t_test, dtype=tf.float64)
+
+with tf.GradientTape() as tape:
+    tape.watch(t_tf)
+    y_pred_tf = model.net(t_tf)
+
+dy_dt = tape.batch_jacobian(y_pred_tf, t_tf)
+
+# remove singleton dimension
+dy_dt = dy_dt[:, :, 0].numpy()
+
+# PINN positions
+y_pred = y_pred_tf.numpy()
+
+x1, y1 = y_pred[:,0], y_pred[:,1]
+x2, y2 = y_pred[:,2], y_pred[:,3]
+x3, y3 = y_pred[:,4], y_pred[:,5]
+
+# PINN velocities
+vx1, vy1 = dy_dt[:,0], dy_dt[:,1]
+vx2, vy2 = dy_dt[:,2], dy_dt[:,3]
+vx3, vy3 = dy_dt[:,4], dy_dt[:,5]
+
+# ============================================================
+# Numerical solution
+# ============================================================
+
+x1_n  = sol.y[0]
+y1_n  = sol.y[1]
+vx1_n = sol.y[2]
+vy1_n = sol.y[3]
+
+x2_n  = sol.y[4]
+y2_n  = sol.y[5]
+vx2_n = sol.y[6]
+vy2_n = sol.y[7]
+
+x3_n  = sol.y[8]
+y3_n  = sol.y[9]
+vx3_n = sol.y[10]
+vy3_n = sol.y[11]
+
+# ============================================================
+# TRAIN / TEST LOSS
+# ============================================================
+
+train_losses = np.array(losshistory.loss_train)
+test_losses  = np.array(losshistory.loss_test)
+
+final_train_loss = np.sum(train_losses[-1])
+final_test_loss  = np.sum(test_losses[-1])
+
+LPDE = final_train_loss     # hard constraints
+LDATA = 0.0
+
+print(f"Final Training Loss : {final_train_loss:.2e}")
+print(f"Final Test Loss     : {final_test_loss:.2e}")
+print(f"PDE Residual Loss   : {LPDE:.2e}")
+print(f"Data Loss           : {LDATA:.2e}")
+
+# ============================================================
+# 2. POSITION ERRORS - RMSE
+# ============================================================
+
+err1 = np.sqrt((x1 - x1_n)**2 + (y1 - y1_n)**2)
+err2 = np.sqrt((x2 - x2_n)**2 + (y2 - y2_n)**2)
+err3 = np.sqrt((x3 - x3_n)**2 + (y3 - y3_n)**2)
+
+rmse1 = np.sqrt(np.mean(err1**2))
+rmse2 = np.sqrt(np.mean(err2**2))
+rmse3 = np.sqrt(np.mean(err3**2))
+
+RMSE = np.sqrt(np.mean(
+    np.concatenate([
+        err1**2,
+        err2**2,
+        err3**2
+    ])
+))
+
+print("\nPosition RMSE")
+print("-----------------------------")
+print(f"Body 1 : {rmse1:.2e}")
+print(f"Body 2 : {rmse2:.2e}")
+print(f"Body 3 : {rmse3:.2e}")
+print(f"Global : {RMSE:.2e}")
+
+print("\nMaximum Position Error")
+print("-----------------------------")
+print(f"Body 1 : {np.max(err1):.2e}")
+print(f"Body 2 : {np.max(err2):.2e}")
+print(f"Body 3 : {np.max(err3):.2e}")
+
+max_pos_error = max(
+    np.max(err1),
+    np.max(err2),
+    np.max(err3)
+)
+print(f"Global Max Position error : {max_pos_error:.2e}")
+
+# ============================================================
+# 3. ENERGY
+# ============================================================
+
+
+
+def total_energy(x1,y1,vx1,vy1,
+                 x2,y2,vx2,vy2,
+                 x3,y3,vx3,vy3,
+                 G=1.0,
+                 m=(1.0,1.0,1.0),
+                 eps=0.0):
+
+    KE = (
+        0.5*m[0]*(vx1**2+vy1**2)
+        +0.5*m[1]*(vx2**2+vy2**2)
+        +0.5*m[2]*(vx3**2+vy3**2)
+    )
+
+    r12 = np.sqrt((x1-x2)**2+(y1-y2)**2+eps)
+    r13 = np.sqrt((x1-x3)**2+(y1-y3)**2+eps)
+    r23 = np.sqrt((x2-x3)**2+(y2-y3)**2+eps)
+
+    PE = (
+        -G*m[0]*m[1]/r12
+        -G*m[0]*m[2]/r13
+        -G*m[1]*m[2]/r23
+    )
+
+    return KE + PE
+
+
+E = total_energy(
+    x1,y1,vx1,vy1,
+    x2,y2,vx2,vy2,
+    x3,y3,vx3,vy3,
+    G,m,eps
+)
+
+E0 = E[0]
+
+DE_E0 = np.max(np.abs(E-E0))/abs(E0)
+
+print("\nEnergy Conservation")
+print("-----------------------------")
+print(f"PINN ΔE/E0 : {DE_E0:.2e}")
+
+E_num = total_energy(
+    x1_n, y1_n, vx1_n, vy1_n,
+    x2_n, y2_n, vx2_n, vy2_n,
+    x3_n, y3_n, vx3_n, vy3_n,
+    G, m, eps
+)
+
+E0_num = E_num[0]
+
+DE_E0_num = np.max(np.abs(E_num-E0_num))/abs(E0_num)
+
+
+print("-----------------------------")
+print(f"Numerical ΔE/E0 : {DE_E0_num:.2e}")
+
+# ============================================================
+# 4. LINEAR MOMENTUM DRIFT
+# ============================================================
+
+Px = m[0]*vx1 + m[1]*vx2 + m[2]*vx3
+Py = m[0]*vy1 + m[1]*vy2 + m[2]*vy3
+
+DeltaP = np.max(
+    np.sqrt(
+        (Px - Px[0])**2 +
+        (Py - Py[0])**2
+    )
+)
+
+print("\nLinear Momentum")
+print("-----------------------------")
+print(f"PINN Max Momentum Drift : {DeltaP:.2e}")
+
+Px_n = m[0]*vx1_n + m[1]*vx2_n + m[2]*vx3_n
+Py_n = m[0]*vy1_n + m[1]*vy2_n + m[2]*vy3_n
+
+DeltaP_n = np.max(
+    np.sqrt(
+        (Px_n - Px_n[0])**2 +
+        (Py_n - Py_n[0])**2
+    )
+)
+
+
+print("-----------------------------")
+print(f"Numerical Max Momentum Drift : {DeltaP_n:.2e}")
+
+
+# ============================================================
+# 5. ANGULAR MOMENTUM
+# ============================================================
+
+L = (
+      m[0]*(x1*vy1-y1*vx1)
+    + m[1]*(x2*vy2-y2*vx2)
+    + m[2]*(x3*vy3-y3*vx3)
+)
+
+L0 = L[0]
+
+DL_L0 = np.max(np.abs(L-L0))/max(abs(L0),1e-15)
+
+print("\nAngular Momentum Conservation")
+print("-----------------------------")
+print(f"ΔL/L0 : {DL_L0:.2e}")
+
+
+# ============================================================
+# FINAL SUMMARY
+# ============================================================
+
+print("\n")
+print("="*60)
+print("SUMMARY")
+print("="*60)
+
+print(f"Final Training Loss               : {final_train_loss:.2e}")
+print(f"Final Test Loss                   : {final_test_loss:.2e}")
+print(f"PDE Residual Loss                 : {LPDE:.2e}")
+print(f"Data Loss                         : {LDATA:.2e}")
+print(f"Global Max Position error         : {max_pos_error:.2e}")
+print(f"Position RMSE                     : {RMSE:.2e}")
+print(f"PINN ΔE/E0                        : {DE_E0:.2e}")
+print(f"Numerical ΔE/E0                   : {DE_E0_num:.2e}")
+print(f"PINN Max Momentum Drift ΔP        : {DeltaP:.2e}")
+print(f"Numerical Max Momentum Drift ΔP   : {DeltaP_n:.2e}")
+print(f"ΔL/L0                             : {DL_L0:.2e}")
+
 """#PHASE PLOTS FOR ONE PERIOD"""
 
 # ============================================================
@@ -339,12 +603,6 @@ plt.show()
 endTime=1
 t_test = np.linspace(0, endTime, 5000)[:, None]
 
-# --- compute PINN positions + velocities with autodiff ---
-t_tf = tf.convert_to_tensor(t_test)
-
-with tf.GradientTape() as tape:
-    tape.watch(t_tf)
-    y_pred = model.net(t_tf)
 
 # ============================================================
 # PHASE DIAGRAMS (PINN vs Numerical) using autodiff velocities
@@ -455,13 +713,6 @@ plt.show()
 #RESTORE endTime
 endTime=1/2
 t_test = np.linspace(0, endTime, 5000)[:, None]
-
-# --- compute PINN positions + velocities with autodiff ---
-t_tf = tf.convert_to_tensor(t_test)
-
-with tf.GradientTape() as tape:
-    tape.watch(t_tf)
-    y_pred = model.net(t_tf)
 
 # ============================================================
 # PHASE DIAGRAMS (PINN vs Numerical) using autodiff velocities
