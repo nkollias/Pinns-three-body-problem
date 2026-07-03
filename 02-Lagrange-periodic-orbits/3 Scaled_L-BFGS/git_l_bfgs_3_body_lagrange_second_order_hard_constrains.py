@@ -1,21 +1,34 @@
 # -*- coding: utf-8 -*-
-"""git-RAR-Lagrange-periodic-orbits.ipynb
-
-## Lagrange orbits with second order system and hard constains for ICs -RAR training
-
----
+"""git-L-BFGS-3-body-Lagrange-second-order-hard-constrains.ipynb
 
 
-*  In the previous experiments involving the Lagrange periodic orbit, training with only 64 collocation points resulted in limited accuracy and signs of overfitting. Furthermore, satisfactory convergence was difficult to achieve using first-order optimization methods alone, often requiring the use of second-order optimization algorithms such as L-BFGS. However, even with L-BFGS, the overfitting behavior was not eliminated. To address these issues, the Residual-Based Adaptive Refinement (RAR) algorithm was employed. By iteratively introducing additional collocation points in regions where the PDE residual is large, RAR aims to improve the accuracy and generalization capability of the PINN while reducing the need for excessively long training procedures.
-  
-*   A modified version of the standard Residual-Based Adaptive Refinement (RAR) algorithm was employed in this work. Instead of selecting only the collocation points associated with the largest residual values, new training points were sampled from the subset whose residuals lie between 60% and 95% of the maximum residual. This strategy avoids concentrating refinement exclusively on a small number of extreme-error regions and promotes a more balanced distribution of collocation points throughout the domain. Empirically, this approach yielded better performance than the standard RAR procedure for the problems considered in this study.
+
+*   The original formulation of the problem yielded a periodic solution with period $T = 4$. To mitigate the effects of saturation in the $tanh$ activation function, the governing equations and initial conditions were rescaled so that the resulting period became $T = 0.5$. Consequently, the network inputs remained largely within the near-linear operating region of the activation function, facilitating more effective training of the PINN.
+
+*   The applied scaling transformation preserves the governing equations and only changes the scales of the dependent variables. Consequently, the rescaled problem is dynamically equivalent to the original system while being more suitable for neural network training.
 """
 
 import os
 os.environ["DDE_BACKEND"] = "tensorflow"
 
+#!pip install deepxde
 
-"""## IMPORTS"""
+#!pip install tensorflow tf_keras matplotlib numpy scipy
+
+"""#Training
+
+
+*   hardware - TPU  (or CPU if not available)
+*   Important hyperparameters: loss_weights , learning rate
+*   Two learning rates, $10^{-4}$ and $10^{-5}$, were investigated. The smaller learning rate resulted in improved fitting accuracy and lower training loss. However, inspection of the training and test loss curves indicates that, after approximately 70,000 epochs, further training does not improve the test loss. This behavior suggests the onset of overfitting, whereby the network continues to reduce the training error without achieving better generalization performance. Furthermore, after approximately 300,000 training epochs, the test loss begins to increase while the training loss continues to decrease. This behavior suggests a deterioration in generalization performance. It also suggests that improved training strategies, such as adaptive sampling, regularization techniques, or an increased number of collocation points, may be required to further enhance the solution accuracy.
+
+
+
+
+
+
+
+"""
 
 import deepxde as dde
 import numpy as np
@@ -25,10 +38,8 @@ from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 from numpy.linalg import norm
 
-
 dde.config.set_default_float("float64")
 seed=137
-
 np.random.seed(seed)
 tf.random.set_seed(seed)
 dde.config.set_random_seed(seed)
@@ -44,12 +55,12 @@ num_boundary = 12
 num_test = 100
 
 layer_size = [1] + [64]*3 + [6]  # 6 outputs for positions only
-activation = "tanh" #"sin"
-initializer = "Glorot uniform" # "He normal" #"Glorot uniform"
-loss_weights = [1]*6
-iterations = 30000
+activation = "tanh"
+initializer = "Glorot uniform"
+loss_weights = [1]*4 +[1]*2   #all weights equal..
+iterations = 100000
 learning_rate = 1e-4
-eps = 1e-9        #softening to avoid division by zero
+eps = 1e-9
 
 # --------------------------------------------------
 # Initial conditions
@@ -80,13 +91,13 @@ def three_body_ode_second(t, y):
     x1, y1, x2, y2, x3, y3 = [y[:, i:i+1] for i in range(6)]
 
     # pairwise distances
-    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 )
-    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 )
-    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 )
+    r12 = tf.sqrt((x1 - x2)**2 + (y1 - y2)**2 +eps)
+    r13 = tf.sqrt((x1 - x3)**2 + (y1 - y3)**2 +eps)
+    r23 = tf.sqrt((x2 - x3)**2 + (y2 - y3)**2 +eps)
 
-    r12_3 = (r12+eps)**3
-    r13_3 = (r13+eps)**3
-    r23_3 = (r23+eps)**3
+    r12_3 = (r12)**3
+    r13_3 = (r13)**3
+    r23_3 = (r23)**3
 
     # accelerations
     ax1 = G*( m[1]*(x2 - x1)/r12_3 + m[2]*(x3 - x1)/r13_3 )
@@ -149,85 +160,28 @@ net.apply_output_transform(output_transform)
 model = dde.Model(data, net)
 
 
-
+#model.compile(
+#    optimizer=tf.keras.optimizers.AdamW(1e-4, weight_decay=1e-5,loss_weights=loss_weights),
+#    loss="MSE",
+#)
 model.compile("adam", lr=learning_rate, loss_weights=loss_weights, loss="MSE")
-#change display_every=1000 to output progress every 1000 epochs
-losshistory, train_state = model.train(iterations=iterations,display_every=1000)
+losshistory, train_state = model.train(iterations=iterations)
 
+model.compile("L-BFGS")  # no learning rate needed
+losshistory, train_state = model.train()
 
 # ============================================================
-# RAR LOOP (Residual-based Adaptive Refinement)
+#   SAVE AND LOAD MODEL
 # ============================================================
+## Load the saved weights
+# first - Build the network with dummy predict
+#_ = model.predict(np.array([[0.0]]))
+#model.restore("Euler_1nd_order_system-2000.weights.h5")
+model.save("Lagrange_L-BFGS_2nd_order_system")
 
-print("\nStarting RAR refinement...\n")
-
-rar_iterations = 21
-candidate_points = 10000
-points_to_add = 64
-# Sample random time points
-X = geom.random_points(candidate_points)   # (N,1)
-for i in range(rar_iterations):
-
-    print(f"\nRAR iteration {i+1}/{rar_iterations}")
-
-    # Compute residual
-    f = model.predict(X, operator=three_body_ode_second)
-
-
-    # If operator returns list, stack it
-    if isinstance(f, list):
-      f = np.hstack(f)   # shape becomes (N, 6)
-    # Ensure residual is 1D
-    residual = np.mean(np.abs(f), axis=1)#.flatten()
-
-    if i%5==0:
-      plt.figure(figsize=(6,4))
-      plt.hist(residual, bins=100)
-      plt.title("Residual Distribution")
-      plt.xlabel("Residual")
-      plt.ylabel("Count")
-      plt.yscale("log")  # important!
-      plt.show()
-
-    # Select worst points
-    #idx = np.argsort(residual)[-points_to_add:]
-    #X_new = X[idx]
-    ###### take the 60%-95% of worst points -- not the worst!
-    threshold_low  = np.percentile(residual, 60)
-    threshold_high = np.percentile(residual, 95)
-    mask = (residual >= threshold_low) & (residual <= threshold_high)
-    candidates = X[mask]
-
-    if len(candidates) >= points_to_add:
-      idx = np.random.choice(len(candidates), points_to_add, replace=False)
-      X_new = candidates[idx]
-    else:
-    # fallback to top-k
-      print("=========> fall back...")
-      idx = np.argsort(residual)[-points_to_add:]
-      X_new = X[idx]
-    #############################################################
-
-    # Force correct shape (M,1)
-    X_new = X_new.reshape(-1, 1)
-
-    print("Max residual:", residual[idx[-1]])
-
-    # Add anchors
-    data.add_anchors(X_new)
-
-    # Retrain
-    #model.compile("L-BFGS")  # no learning rate needed
-    #losshistory, train_state = model.train()
-    model.compile("adam", lr=1e-4, loss_weights=loss_weights, loss="MSE")
-    #change display_every=1000 to output progress every 1000 epochs
-    model.train(iterations=10000,display_every=1000,disregard_previous_best=True,)
-
-#model.compile("L-BFGS")  # no learning rate needed
-#losshistory, train_state = model.train()
+"""#Plots and Results"""
 
 dde.saveplot(losshistory, train_state, issave=True, isplot=True)
-
 # ============================================================
 # PINN Predictions
 # ============================================================
@@ -244,9 +198,9 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 def three_body_numeric(t, y, G=1.0, m=(1.0, 1.0, 1.0)):
     x1, y1, vx1, vy1, x2, y2, vx2, vy2, x3, y3, vx3, vy3 = y
 
-    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 )+eps
-    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 )+eps
-    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 )+eps
+    r12 = np.sqrt((x1 - x2)**2 + (y1 - y2)**2 +eps)
+    r13 = np.sqrt((x1 - x3)**2 + (y1 - y3)**2 +eps)
+    r23 = np.sqrt((x2 - x3)**2 + (y2 - y3)**2 +eps)
 
     ax1 = G * (m[1]*(x2 - x1)/r12**3 + m[2]*(x3 - x1)/r13**3)
     ay1 = G * (m[1]*(y2 - y1)/r12**3 + m[2]*(y3 - y1)/r13**3)
@@ -309,20 +263,20 @@ interp_y2 = interp1d(t_eval, y2_n, kind='cubic')
 interp_x3 = interp1d(t_eval, x3_n, kind='cubic')
 interp_y3 = interp1d(t_eval, y3_n, kind='cubic')
 
-x1_err = norm(x1 - interp_x1(t_test[:,0])) / norm(interp_x1(t_test[:,0]))
-y1_err = norm(y1 - interp_y1(t_test[:,0])) / norm(interp_y1(t_test[:,0]))
-x2_err = norm(x2 - interp_x2(t_test[:,0])) / norm(interp_x2(t_test[:,0]))
-y2_err = norm(y2 - interp_y2(t_test[:,0])) / norm(interp_y2(t_test[:,0]))
-x3_err = norm(x3 - interp_x3(t_test[:,0])) / norm(interp_x3(t_test[:,0]))
-y3_err = norm(y3 - interp_y3(t_test[:,0])) / norm(interp_y3(t_test[:,0]))
+x1_ref = norm(x1 - interp_x1(t_test[:,0])) / norm(interp_x1(t_test[:,0]))
+y1_ref = norm(y1 - interp_y1(t_test[:,0])) / norm(interp_y1(t_test[:,0]))
+x2_ref = norm(x2 - interp_x2(t_test[:,0])) / norm(interp_x2(t_test[:,0]))
+y2_ref = norm(y2 - interp_y2(t_test[:,0])) / norm(interp_y2(t_test[:,0]))
+x3_ref = norm(x3 - interp_x3(t_test[:,0])) / norm(interp_x3(t_test[:,0]))
+y3_ref = norm(y3 - interp_y3(t_test[:,0])) / norm(interp_y3(t_test[:,0]))
 
 print("\n--- L2 Relative Errors ---")
-print(f"Body 1 x error: {x1_err:.2e}")
-print(f"Body 1 y error: {y1_err:.2e}")
-print(f"Body 2 x error: {x2_err:.2e}")
-print(f"Body 2 y error: {y2_err:.2e}")
-print(f"Body 3 x error: {x3_err:.2e}")
-print(f"Body 3 y error: {y3_err:.2e}")
+print(f"Body 1 x error: {x1_ref:.2e}")
+print(f"Body 1 y error: {y1_ref:.2e}")
+print(f"Body 2 x error: {x2_ref:.2e}")
+print(f"Body 2 y error: {y2_ref:.2e}")
+print(f"Body 3 x error: {x3_ref:.2e}")
+print(f"Body 3 y error: {y3_ref:.2e}")
 
 
 
@@ -347,17 +301,270 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
+"""STATISTICS"""
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+
+print("\n")
+print("="*60)
+print("STATISTICS")
+print("="*60)
+
+# ============================================================
+# PINN velocities from automatic differentiation
+# ============================================================
+
+t_tf = tf.convert_to_tensor(t_test, dtype=tf.float64)
+
+with tf.GradientTape() as tape:
+    tape.watch(t_tf)
+    y_pred_tf = model.net(t_tf)
+
+dy_dt = tape.batch_jacobian(y_pred_tf, t_tf)
+
+# remove singleton dimension
+dy_dt = dy_dt[:, :, 0].numpy()
+
+# PINN positions
+y_pred = y_pred_tf.numpy()
+
+x1, y1 = y_pred[:,0], y_pred[:,1]
+x2, y2 = y_pred[:,2], y_pred[:,3]
+x3, y3 = y_pred[:,4], y_pred[:,5]
+
+# PINN velocities
+vx1, vy1 = dy_dt[:,0], dy_dt[:,1]
+vx2, vy2 = dy_dt[:,2], dy_dt[:,3]
+vx3, vy3 = dy_dt[:,4], dy_dt[:,5]
+
+# ============================================================
+# Numerical solution
+# ============================================================
+
+x1_n  = sol.y[0]
+y1_n  = sol.y[1]
+vx1_n = sol.y[2]
+vy1_n = sol.y[3]
+
+x2_n  = sol.y[4]
+y2_n  = sol.y[5]
+vx2_n = sol.y[6]
+vy2_n = sol.y[7]
+
+x3_n  = sol.y[8]
+y3_n  = sol.y[9]
+vx3_n = sol.y[10]
+vy3_n = sol.y[11]
+
+# ============================================================
+# TRAIN / TEST LOSS
+# ============================================================
+
+train_losses = np.array(losshistory.loss_train)
+test_losses  = np.array(losshistory.loss_test)
+
+final_train_loss = np.sum(train_losses[-1])
+final_test_loss  = np.sum(test_losses[-1])
+
+LPDE = final_train_loss     # hard constraints
+LDATA = 0.0
+
+print(f"Final Training Loss : {final_train_loss:.2e}")
+print(f"Final Test Loss     : {final_test_loss:.2e}")
+print(f"PDE Residual Loss   : {LPDE:.2e}")
+print(f"Data Loss           : {LDATA:.2e}")
+
+# ============================================================
+# 2. POSITION ERRORS - RMSE
+# ============================================================
+
+err1 = np.sqrt((x1 - x1_n)**2 + (y1 - y1_n)**2)
+err2 = np.sqrt((x2 - x2_n)**2 + (y2 - y2_n)**2)
+err3 = np.sqrt((x3 - x3_n)**2 + (y3 - y3_n)**2)
+
+rmse1 = np.sqrt(np.mean(err1**2))
+rmse2 = np.sqrt(np.mean(err2**2))
+rmse3 = np.sqrt(np.mean(err3**2))
+
+RMSE = np.sqrt(np.mean(
+    np.concatenate([
+        err1**2,
+        err2**2,
+        err3**2
+    ])
+))
+
+print("\nPosition RMSE")
+print("-----------------------------")
+print(f"Body 1 : {rmse1:.2e}")
+print(f"Body 2 : {rmse2:.2e}")
+print(f"Body 3 : {rmse3:.2e}")
+print(f"Global : {RMSE:.2e}")
+
+print("\nMaximum Position Error")
+print("-----------------------------")
+print(f"Body 1 : {np.max(err1):.2e}")
+print(f"Body 2 : {np.max(err2):.2e}")
+print(f"Body 3 : {np.max(err3):.2e}")
+
+max_pos_error = max(
+    np.max(err1),
+    np.max(err2),
+    np.max(err3)
+)
+print(f"Global Max Position error : {max_pos_error:.2e}")
+
+# ============================================================
+# 3. ENERGY
+# ============================================================
+
+
+
+def total_energy(x1,y1,vx1,vy1,
+                 x2,y2,vx2,vy2,
+                 x3,y3,vx3,vy3,
+                 G=1.0,
+                 m=(1.0,1.0,1.0),
+                 eps=0.0):
+
+    KE = (
+        0.5*m[0]*(vx1**2+vy1**2)
+        +0.5*m[1]*(vx2**2+vy2**2)
+        +0.5*m[2]*(vx3**2+vy3**2)
+    )
+
+    r12 = np.sqrt((x1-x2)**2+(y1-y2)**2+eps)
+    r13 = np.sqrt((x1-x3)**2+(y1-y3)**2+eps)
+    r23 = np.sqrt((x2-x3)**2+(y2-y3)**2+eps)
+
+    PE = (
+        -G*m[0]*m[1]/r12
+        -G*m[0]*m[2]/r13
+        -G*m[1]*m[2]/r23
+    )
+
+    return KE + PE
+
+
+E = total_energy(
+    x1,y1,vx1,vy1,
+    x2,y2,vx2,vy2,
+    x3,y3,vx3,vy3,
+    G,m,eps
+)
+
+E0 = E[0]
+
+DE_E0 = np.max(np.abs(E-E0))/abs(E0)
+
+print("\nEnergy Conservation")
+print("-----------------------------")
+print(f"PINN ΔE/E0 : {DE_E0:.2e}")
+
+E_num = total_energy(
+    x1_n, y1_n, vx1_n, vy1_n,
+    x2_n, y2_n, vx2_n, vy2_n,
+    x3_n, y3_n, vx3_n, vy3_n,
+    G, m, eps
+)
+
+E0_num = E_num[0]
+
+DE_E0_num = np.max(np.abs(E_num-E0_num))/abs(E0_num)
+
+
+print("-----------------------------")
+print(f"Numerical ΔE/E0 : {DE_E0_num:.2e}")
+
+# ============================================================
+# 4. LINEAR MOMENTUM DRIFT
+# ============================================================
+
+Px = m[0]*vx1 + m[1]*vx2 + m[2]*vx3
+Py = m[0]*vy1 + m[1]*vy2 + m[2]*vy3
+
+DeltaP = np.max(
+    np.sqrt(
+        (Px - Px[0])**2 +
+        (Py - Py[0])**2
+    )
+)
+
+print("\nLinear Momentum")
+print("-----------------------------")
+print(f"PINN Max Momentum Drift : {DeltaP:.2e}")
+
+Px_n = m[0]*vx1_n + m[1]*vx2_n + m[2]*vx3_n
+Py_n = m[0]*vy1_n + m[1]*vy2_n + m[2]*vy3_n
+
+DeltaP_n = np.max(
+    np.sqrt(
+        (Px_n - Px_n[0])**2 +
+        (Py_n - Py_n[0])**2
+    )
+)
+
+
+print("-----------------------------")
+print(f"Numerical Max Momentum Drift : {DeltaP_n:.2e}")
+
+
+# ============================================================
+# 5. ANGULAR MOMENTUM
+# ============================================================
+
+L = (
+      m[0]*(x1*vy1-y1*vx1)
+    + m[1]*(x2*vy2-y2*vx2)
+    + m[2]*(x3*vy3-y3*vx3)
+)
+
+L0 = L[0]
+
+DL_L0 = np.max(np.abs(L-L0))/max(abs(L0),1e-15)
+
+print("\nAngular Momentum Conservation")
+print("-----------------------------")
+print(f"ΔL/L0 : {DL_L0:.2e}")
+
+
+# ============================================================
+# FINAL SUMMARY
+# ============================================================
+
+print("\n")
+print("="*60)
+print("SUMMARY")
+print("="*60)
+
+print(f"Final Training Loss               : {final_train_loss:.2e}")
+print(f"Final Test Loss                   : {final_test_loss:.2e}")
+print(f"PDE Residual Loss                 : {LPDE:.2e}")
+print(f"Data Loss                         : {LDATA:.2e}")
+print(f"Global Max Position error         : {max_pos_error:.2e}")
+print(f"Position RMSE                     : {RMSE:.2e}")
+print(f"PINN ΔE/E0                        : {DE_E0:.2e}")
+print(f"Numerical ΔE/E0                   : {DE_E0_num:.2e}")
+print(f"PINN Max Momentum Drift ΔP        : {DeltaP:.2e}")
+print(f"Numerical Max Momentum Drift ΔP   : {DeltaP_n:.2e}")
+print(f"ΔL/L0                             : {DL_L0:.2e}")
+
+"""#Extrapolation for two Periods"""
+
 #============================ EXTRAPOLATE =================================================
 print("===================================================================================")
 print("======================= Extrapolating for 2 Periods ===============================")
 print("===================================================================================")
 
-endTime=2*endTime
+exTime=2*endTime
 
 # ============================================================
 # PINN Predictions
 # ============================================================
-t_test = np.linspace(0, endTime, 5000)[:, None]
+t_test = np.linspace(0, exTime, 5000)[:, None]
 y_pred = model.predict(t_test)
 
 x1, y1 = y_pred[:, 0], y_pred[:, 1]
@@ -368,8 +575,9 @@ x3, y3 = y_pred[:, 4], y_pred[:, 5]
 # Numerical Solution via SciPy
 # ============================================================
 
-t_span = (0, endTime)
-t_eval = np.linspace(0, endTime, 5000)
+
+t_span = (0, exTime)
+t_eval = np.linspace(0, exTime, 5000)
 
 y0_full = np.array([
     x1_0, y1_0, vx1_0, vy1_0,
